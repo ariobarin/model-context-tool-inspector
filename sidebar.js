@@ -78,7 +78,9 @@ chrome.runtime.onMessage.addListener(async ({ message, tools, url, ready }, send
     // navigation (see the post-tool-call wait in promptAI). `ready` is true only
     // for the EXPERIMENTAL webmcp:ready-driven push (see content.js) — the
     // settled, full-tool-set snapshot; toolchange-driven pushes pass it falsy.
-    activeRun.onToolsUpdate?.(ready);
+    // `url` lets the waiter ignore a late report still coming from the page we
+    // navigated away from, settling on the destination's own report instead.
+    activeRun.onToolsUpdate?.(ready, url);
   }
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -872,13 +874,40 @@ function waitForPageLoad(tabId) {
 //     non-instrumented pages responsive while still preferring the settled signal.
 //  3. No push at all (page emits neither) → the outer `timeout` fallback.
 //
+// All three ignore a report from the page we navigated AWAY from, identified by
+// `fromUrl` (the tab's url captured before the batch ran - a url we know for
+// certain, unlike a post-redirect destination). A late `ready`/toolchange racing
+// the old page's teardown would otherwise settle this wait against the page we
+// left. We key on the departure url rather than the destination so a redirect or
+// path normalization on the way in does NOT cause us to reject the destination's
+// own report and stall to the timeout - any report that isn't from `fromUrl`,
+// wherever it landed, is allowed to settle. Compared by origin+pathname so a
+// query/hash-only change still counts as the same departure page. A `ready` push
+// settles regardless of tool count, so a destination that legitimately registers
+// zero tools does not stall to the timeout. (Edge: a deliberate reload of the
+// same url settles via the timeout, since its report matches `fromUrl`.)
+//
 // CAVEAT: pages outside webmcp-public-sites never emit `webmcp:ready`, so they
 // always resolve via path 2 or 3, i.e. on the grace/fallback timers rather than
 // a real signal. This couples the generic inspector to our instrumented sites
 // and should be reconsidered (e.g. fold the nav/timeout heuristics and this
 // signal into one model) in a future pass.
 const READY_GRACE_MS = 400;
-function waitForToolsUpdate(run, timeout) {
+// Same page, including the query string: a query-only navigation (pagination,
+// filters: ?page=1 -> ?page=2) is a genuinely different destination, so it must
+// NOT be treated as the page we left, or its own report would be rejected and
+// the wait would stall to the timeout. Hash is excluded: a hash-only change is
+// same-document and never triggers this nav-wait path anyway.
+const sameDoc = (a, b) => {
+  try {
+    const x = new URL(a);
+    const y = new URL(b);
+    return x.origin === y.origin && x.pathname === y.pathname && x.search === y.search;
+  } catch {
+    return a === b;
+  }
+};
+function waitForToolsUpdate(run, { timeout, fromUrl } = {}) {
   return new Promise((resolve) => {
     let graceTimer = null;
     const done = () => {
@@ -888,8 +917,11 @@ function waitForToolsUpdate(run, timeout) {
       resolve();
     };
     const fallbackTimer = setTimeout(done, timeout);
-    run.onToolsUpdate = (ready) => {
-      if (ready) return done();                       // settled signal -> resolve now
+    // Ignore a report still coming from the page we left; settle on any other.
+    const fromPageWeLeft = (reportUrl) => fromUrl && reportUrl && sameDoc(reportUrl, fromUrl);
+    run.onToolsUpdate = (ready, reportUrl) => {
+      if (fromPageWeLeft(reportUrl)) return;          // stale report from the old page
+      if (ready) return done();                       // destination settled -> resolve now
       if (!graceTimer) graceTimer = setTimeout(done, READY_GRACE_MS);
     };
   });
@@ -912,6 +944,14 @@ const TOOLS_UPDATE_TIMEOUT_MS = 2000;
 function watchNavigation(run) {
   let started = false;
   let wake = null;
+  // Read the departure url now (dispatched before the batch runs, so it normally
+  // resolves while the tab is still on the source page) so the post-nav wait can
+  // ignore a late report from that page. Read here rather than after the load,
+  // which would race a redirect and capture the destination instead. Worst case,
+  // if a tool navigates before this async read resolves (unlikely - it is queued
+  // first), it captures the destination and the wait falls back to the timeout;
+  // correctness is preserved (activeRun.tools is still updated by the report).
+  const fromUrlPromise = chrome.tabs.get(run.tabId).then((t) => t?.url).catch(() => undefined);
   const onUpdated = (id, info) => {
     if (id === run.tabId && info.status === 'loading') {
       started = true;
@@ -937,7 +977,9 @@ function watchNavigation(run) {
         // `complete` that already fired until the page-load cap.
         const tab = await chrome.tabs.get(run.tabId).catch(() => null);
         if (tab?.status === 'loading') await waitForPageLoad(run.tabId);
-        await waitForToolsUpdate(run, TOOLS_UPDATE_TIMEOUT_MS);
+        // Settle on the destination's report, ignoring a late one from the page
+        // we left (keyed to the departure url captured before the navigation).
+        await waitForToolsUpdate(run, { timeout: TOOLS_UPDATE_TIMEOUT_MS, fromUrl: await fromUrlPromise });
       } finally {
         chrome.tabs.onUpdated.removeListener(onUpdated);
       }
