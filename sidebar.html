@@ -45,6 +45,20 @@
       </dialog>
 
       <dialog id="advancedSection" popover autofocus>
+        <div class="menu-label">Agent</div>
+        <label class="model-option">
+          <input type="radio" name="agentArchitecture" value="base" checked>
+          <span>Base</span>
+        </label>
+        <label class="model-option">
+          <input type="radio" name="agentArchitecture" value="weboperator">
+          <span>WebOperator</span>
+        </label>
+        <label class="model-option">
+          <input type="radio" name="agentArchitecture" value="opagent">
+          <span>OpAgent</span>
+        </label>
+
         <div class="menu-label">Provider</div>
         <label class="model-option">
           <input type="radio" name="provider" value="gemini">
@@ -145,6 +159,12 @@
 
         <div class="menu-label">API Key</div>
         <input type="password" id="apiKeyInput" placeholder="API key">
+
+        <div class="menu-label">Agent Adapter</div>
+        <input type="url" id="agentAdapterUrlInput" placeholder="http://127.0.0.1:8765">
+
+        <div class="menu-label">Max Steps</div>
+        <input type="number" id="agentMaxStepsInput" min="1" max="200" step="1">
       </dialog>
 
       <div class="form-group">
@@ -153,6 +173,7 @@
         <button id="resetBtn" class="secondary" disabled>Reset</button>
         <button id="configBtn" class="secondary" popovertarget="advancedSection">Config</button>
         <button id="toolsBtn" class="secondary" popovertarget="globalToolsSection">Tools</button>
+        <button id="inspectBtn" class="secondary">Inspect</button>
         <button id="traceBtn" class="secondary">Copy trace</button>
       </div>
 

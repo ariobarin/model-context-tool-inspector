@@ -86,10 +86,49 @@ ship defaults in an optional `.env.json` next to `sidebar.html`:
   "deepseekApiKey": "...",
   "deepseekModel": "deepseek-v4-flash",
   "deepseekThinking": "disabled",
+  "agentArchitecture": "base",
+  "agentAdapterUrl": "http://127.0.0.1:8765",
+  "agentMaxSteps": 30,
   "apiKey": "...",
   "model": "gemini-3-flash-preview"
 }
 ```
+
+## Choosing an agent architecture
+
+The side panel supports multiple agent architectures. Open **Config** and choose:
+
+* **Base:** the built-in direct function-calling loop. This is the default.
+* **WebOperator:** sends page inspections to a local WebOperator adapter.
+* **OpAgent:** sends page inspections to a local OpAgent adapter.
+
+The adapter modes are intended to preserve full browser-agent behavior, not only
+WebMCP tool calls. Each step sends a snapshot containing the current tab, DOM
+inspection, visible screenshot, available browser actions, and available WebMCP
+tools to:
+
+* `POST {agentAdapterUrl}/agents/weboperator/step`
+* `POST {agentAdapterUrl}/agents/opagent/step`
+
+Adapters should return either a final answer:
+
+```json
+{ "done": true, "finalAnswer": "Task completed" }
+```
+
+or one action or a list of actions:
+
+```json
+{
+  "thought": "Use the page search field.",
+  "action": { "type": "fill", "args": { "bid": "3", "value": "laptop", "pressEnter": true } }
+}
+```
+
+Supported action types are `click`, `fill`, `type`, `select_option`, `scroll`,
+`goto`, `go_back`, `go_forward`, `wait`, `webmcp_call`, `webmcp_tool`, `answer`,
+and `stop`. The **Inspect** button records the same normalized page snapshot to
+the trace without starting an agent run.
 
 ## Disclaimer
 

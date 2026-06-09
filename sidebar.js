@@ -36,9 +36,12 @@ const toolResults = document.getElementById('toolResults');
 const userPromptText = document.getElementById('userPromptText');
 const promptBtn = document.getElementById('promptBtn');
 const suggestBtn = document.getElementById('suggestBtn');
+const inspectBtn = document.getElementById('inspectBtn');
 const traceBtn = document.getElementById('traceBtn');
 const resetBtn = document.getElementById('resetBtn');
 const apiKeyInput = document.getElementById('apiKeyInput');
+const agentAdapterUrlInput = document.getElementById('agentAdapterUrlInput');
+const agentMaxStepsInput = document.getElementById('agentMaxStepsInput');
 const promptResults = document.getElementById('promptResults');
 const advancedSection = document.getElementById('advancedSection');
 const globalToolsList = document.getElementById('globalToolsList');
@@ -210,6 +213,46 @@ function currentModel() {
   return localStorage.model;
 }
 
+const AGENT_ARCHITECTURES = {
+  base: {
+    label: 'Base',
+    adapter: false,
+  },
+  weboperator: {
+    label: 'WebOperator',
+    adapter: true,
+    endpoint: '/agents/weboperator/step',
+  },
+  opagent: {
+    label: 'OpAgent',
+    adapter: true,
+    endpoint: '/agents/opagent/step',
+  },
+};
+
+function currentAgentArchitecture() {
+  return AGENT_ARCHITECTURES[localStorage.agentArchitecture]
+    ? localStorage.agentArchitecture
+    : 'base';
+}
+
+function currentAgent() {
+  return AGENT_ARCHITECTURES[currentAgentArchitecture()];
+}
+
+function isAdapterAgent() {
+  return !!currentAgent().adapter;
+}
+
+function currentAdapterBaseUrl() {
+  return (localStorage.agentAdapterUrl || '').replace(/\/+$/, '');
+}
+
+function currentAgentMaxSteps() {
+  const maxSteps = Number.parseInt(localStorage.agentMaxSteps || '30', 10);
+  return Number.isFinite(maxSteps) && maxSteps > 0 ? maxSteps : 30;
+}
+
 // Built-in (page-independent) tools are opt-in per tool. The enabled set is a
 // JSON name->bool map in localStorage; an absent or unparseable value means all
 // off. Old single-flag values (e.g. 'on') simply fall back to nothing enabled.
@@ -240,6 +283,9 @@ async function initProvider() {
   } catch {}
 
   localStorage.provider ??= env?.provider || 'ark';
+  localStorage.agentArchitecture ??= env?.agentArchitecture || 'base';
+  localStorage.agentAdapterUrl ??= env?.agentAdapterUrl || 'http://127.0.0.1:8765';
+  localStorage.agentMaxSteps ??= String(env?.agentMaxSteps || 30);
 
   // Gemini key + model migrations.
   if (env?.apiKey) localStorage.apiKey ??= env.apiKey;
@@ -283,6 +329,16 @@ async function initProvider() {
   syncAdvancedUI();
 }
 
+function canRunAgent() {
+  if (isAdapterAgent()) return !!currentAdapterBaseUrl();
+  return !!genAI;
+}
+
+function updateRunButtons() {
+  promptBtn.disabled = !canRunAgent();
+  resetBtn.disabled = !canRunAgent();
+}
+
 // (Re)build the active provider's client and gate the Send/Reset buttons on it.
 async function refreshClient() {
   if (isArk()) {
@@ -313,8 +369,7 @@ async function refreshClient() {
     genAI = undefined;
   }
   chat = undefined;
-  promptBtn.disabled = !genAI;
-  resetBtn.disabled = !genAI;
+  updateRunButtons();
   updateSuggestButton();
 }
 
@@ -340,15 +395,27 @@ function setRadio(name, value) {
 }
 
 function syncAdvancedUI() {
+  setRadio('agentArchitecture', currentAgentArchitecture());
   setRadio('provider', localStorage.provider);
   setRadio('geminiModel', localStorage.model);
   setRadio('arkModel', localStorage.arkModel);
   setRadio('arkThinking', localStorage.arkThinking);
   setRadio('deepseekModel', localStorage.deepseekModel);
   setRadio('deepseekThinking', localStorage.deepseekThinking);
+  agentAdapterUrlInput.value = localStorage.agentAdapterUrl || '';
+  agentMaxStepsInput.value = String(currentAgentMaxSteps());
 }
 
 await initProvider();
+
+document.querySelectorAll('input[name="agentArchitecture"]').forEach((radio) => {
+  radio.onchange = () => {
+    localStorage.agentArchitecture = radio.value;
+    chat = undefined;
+    updateRunButtons();
+    updateSuggestButton();
+  };
+});
 
 document.querySelectorAll('input[name="provider"]').forEach((radio) => {
   radio.onchange = async () => {
@@ -395,9 +462,21 @@ document.querySelectorAll('input[name="deepseekThinking"]').forEach((radio) => {
   };
 });
 
+agentAdapterUrlInput.oninput = () => {
+  localStorage.agentAdapterUrl = agentAdapterUrlInput.value.trim();
+  updateRunButtons();
+};
+
+agentMaxStepsInput.oninput = () => {
+  const maxSteps = Number.parseInt(agentMaxStepsInput.value, 10);
+  if (Number.isFinite(maxSteps) && maxSteps > 0) {
+    localStorage.agentMaxSteps = String(maxSteps);
+  }
+};
+
 // The Suggest button is usable once a client and tools are both available.
 function updateSuggestButton() {
-  suggestBtn.disabled = !genAI || !currentTools || currentTools.length === 0;
+  suggestBtn.disabled = isAdapterAgent() || !genAI || !currentTools || currentTools.length === 0;
 }
 
 suggestBtn.onclick = async () => {
@@ -473,11 +552,19 @@ async function promptAI() {
 
   const run = (activeRun = { id: myRun, tabId: tab.id, tools: currentTools || [] });
 
-  chat ??= genAI.chats.create({ model: currentModel() });
-
   const message = userPromptText.value;
   userPromptText.value = '';
   logLine('user', 'User', message);
+
+  const architecture = currentAgentArchitecture();
+  if (architecture !== 'base') {
+    const runtime = new BrowserRuntime({ tab, run, stopped });
+    await promptAdapterAgent({ architecture, runtime, message, stopped });
+    return;
+  }
+
+  chat ??= genAI.chats.create({ model: currentModel() });
+
   const sendMessageParams = { message, config: getConfig(run.tools) };
   trace.push({ userPrompt: sendMessageParams });
   let currentResult = await chat.sendMessage(sendMessageParams);
@@ -552,6 +639,426 @@ async function promptAI() {
   }
 }
 
+const BROWSER_ACTIONS = [
+  {
+    type: 'click',
+    description: 'Click an element by bid, CSS selector, or screenshot coordinates.',
+    schema: { bid: 'string?', selector: 'string?', x: 'number?', y: 'number?' },
+  },
+  {
+    type: 'fill',
+    description: 'Fill an input, textarea, or editable element by bid, selector, or coordinates.',
+    schema: { bid: 'string?', selector: 'string?', x: 'number?', y: 'number?', value: 'string', pressEnter: 'boolean?' },
+  },
+  {
+    type: 'type',
+    description: 'Alias for fill.',
+    schema: { bid: 'string?', selector: 'string?', x: 'number?', y: 'number?', text: 'string', pressEnter: 'boolean?' },
+  },
+  {
+    type: 'select_option',
+    description: 'Select an option in a select element.',
+    schema: { bid: 'string?', selector: 'string?', option: 'string' },
+  },
+  {
+    type: 'scroll',
+    description: 'Scroll the page vertically or horizontally.',
+    schema: { direction: 'up|down|left|right', distance: 'number?' },
+  },
+  { type: 'goto', description: 'Navigate the current tab to a URL.', schema: { url: 'string' } },
+  { type: 'go_back', description: 'Navigate back.', schema: {} },
+  { type: 'go_forward', description: 'Navigate forward.', schema: {} },
+  { type: 'wait', description: 'Wait for a number of seconds.', schema: { seconds: 'number' } },
+  {
+    type: 'webmcp_call',
+    description: 'Call a WebMCP tool by name with JSON arguments.',
+    schema: { tool: 'string', params: 'object|string?' },
+  },
+  {
+    type: 'webmcp_tool',
+    description: 'OpAgent alias for webmcp_call.',
+    schema: { tool_name: 'string', tool_args: 'object|string?' },
+  },
+  { type: 'answer', description: 'Finish with a final answer.', schema: { content: 'string' } },
+  { type: 'stop', description: 'Finish with a final answer.', schema: { text: 'string' } },
+];
+
+class BrowserRuntime {
+  constructor({ tab, run, stopped }) {
+    this.tab = tab;
+    this.run = run;
+    this.stopped = stopped;
+  }
+
+  async inspect({ includeScreenshot = false } = {}) {
+    const tab = await chrome.tabs.get(this.tab.id);
+    const snapshot = await this.getDomSnapshot();
+    const screenshot = includeScreenshot ? await this.captureScreenshot(tab).catch((error) => ({ error: String(error) })) : null;
+    return {
+      tab: {
+        id: tab.id,
+        title: tab.title,
+        url: tab.url,
+        status: tab.status,
+      },
+      date: getFormattedDate(),
+      architecture: currentAgentArchitecture(),
+      actions: BROWSER_ACTIONS,
+      webmcpTools: normalizeToolsForAdapter(this.run.tools || []),
+      dom: snapshot,
+      screenshot,
+    };
+  }
+
+  async captureScreenshot(tab) {
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+    return { dataUrl };
+  }
+
+  async getDomSnapshot() {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId: this.tab.id, frameIds: [0] },
+      func: collectPageSnapshot,
+    });
+    return result;
+  }
+
+  async executeAction(action) {
+    const normalized = normalizeAction(action);
+    if (!normalized?.type) throw new Error(`Invalid action: ${JSON.stringify(action)}`);
+
+    if (normalized.type === 'answer' || normalized.type === 'stop') {
+      return {
+        ok: true,
+        terminal: true,
+        message: normalized.args.content || normalized.args.text || 'Done.',
+      };
+    }
+
+    if (normalized.type === 'webmcp_call' || normalized.type === 'webmcp_tool') {
+      return await this.executeWebMcpAction(normalized);
+    }
+
+    const nav = watchNavigation(this.run);
+    let result;
+    try {
+      if (normalized.type === 'goto') {
+        await chrome.tabs.update(this.tab.id, { url: normalized.args.url });
+        await waitForPageLoad(this.tab.id);
+        result = { ok: true, url: normalized.args.url };
+      } else if (normalized.type === 'go_back') {
+        await chrome.tabs.goBack(this.tab.id);
+        await waitForPageLoad(this.tab.id);
+        result = { ok: true };
+      } else if (normalized.type === 'go_forward') {
+        await chrome.tabs.goForward(this.tab.id);
+        await waitForPageLoad(this.tab.id);
+        result = { ok: true };
+      } else if (normalized.type === 'wait') {
+        await new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(normalized.args.seconds || 1)) * 1000));
+        result = { ok: true };
+      } else {
+        const [{ result: pageResult }] = await chrome.scripting.executeScript({
+          target: { tabId: this.tab.id, frameIds: [0] },
+          func: executePageAction,
+          args: [normalized],
+        });
+        result = pageResult;
+      }
+      await nav.settle();
+      return result;
+    } finally {
+      if (this.stopped()) return { ok: false, stopped: true };
+    }
+  }
+
+  async executeWebMcpAction(action) {
+    const args = action.args || {};
+    const toolName = args.tool || args.tool_name || args.name;
+    let params = args.params ?? args.tool_args ?? args.arguments ?? {};
+    if (params == null) params = {};
+    const inputArgs = typeof params === 'string' ? params : JSON.stringify(params);
+    const tool = (this.run.tools || []).find((item) => item.name === toolName);
+    if (!tool) {
+      throw new Error(`WebMCP tool "${toolName}" is not available on this page.`);
+    }
+    const nav = watchNavigation(this.run);
+    try {
+      const result = await executeTool(this.tab.id, toolName, inputArgs, tool.location || '');
+      await nav.settle();
+      return { ok: true, result };
+    } finally {
+      if (this.stopped()) return { ok: false, stopped: true };
+    }
+  }
+}
+
+function collectPageSnapshot() {
+  const interactiveSelector = [
+    'a[href]',
+    'button',
+    'input',
+    'textarea',
+    'select',
+    '[role="button"]',
+    '[role="link"]',
+    '[role="menuitem"]',
+    '[contenteditable="true"]',
+    '[onclick]',
+    '[tabindex]:not([tabindex="-1"])',
+  ].join(',');
+  const elements = Array.from(document.querySelectorAll(interactiveSelector)).slice(0, 250);
+  const interactive = elements.map((el, index) => {
+    const bid = String(index);
+    el.setAttribute('data-mcti-bid', bid);
+    const rect = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    const label = [
+      el.getAttribute('aria-label'),
+      el.getAttribute('title'),
+      el.innerText,
+      el.value,
+      el.placeholder,
+      el.name,
+      el.id,
+    ].find((value) => value && String(value).trim());
+    return {
+      bid,
+      tag: el.tagName.toLowerCase(),
+      role: el.getAttribute('role') || '',
+      type: el.getAttribute('type') || '',
+      text: String(label || '').replace(/\s+/g, ' ').trim().slice(0, 180),
+      href: el.href || '',
+      selector: selectorForElement(el),
+      rect: {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      },
+      visible: rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none',
+    };
+  });
+
+  return {
+    title: document.title,
+    url: location.href,
+    viewport: { width: innerWidth, height: innerHeight },
+    scroll: { x: scrollX, y: scrollY },
+    text: document.body?.innerText?.replace(/\s+/g, ' ').trim().slice(0, 6000) || '',
+    interactive,
+  };
+
+  function selectorForElement(el) {
+    if (el.id) return `#${CSS.escape(el.id)}`;
+    const bid = el.getAttribute('data-mcti-bid');
+    if (bid) return `[data-mcti-bid="${CSS.escape(bid)}"]`;
+    return el.tagName.toLowerCase();
+  }
+}
+
+function executePageAction(action) {
+  const { type, args = {} } = action;
+  const element = resolveTarget(args);
+  if (type === 'click') {
+    if (!element) return { ok: false, error: 'No click target found.' };
+    element.click();
+    return { ok: true };
+  }
+  if (type === 'fill' || type === 'type') {
+    if (!element) return { ok: false, error: 'No fill target found.' };
+    const value = args.value ?? args.text ?? args.content ?? '';
+    element.focus();
+    if ('value' in element) {
+      element.value = value;
+      element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    } else {
+      element.textContent = value;
+      element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+    }
+    if (args.pressEnter || args.press_enter || args.press_enter_after) {
+      element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      element.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+    }
+    return { ok: true };
+  }
+  if (type === 'select_option') {
+    if (!element) return { ok: false, error: 'No select target found.' };
+    const option = args.option ?? args.value ?? '';
+    element.value = option;
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+    return { ok: true };
+  }
+  if (type === 'scroll') {
+    const distance = Number(args.distance ?? args.pixel_amount ?? 500);
+    const direction = args.direction || 'down';
+    const dx = direction === 'left' ? -distance : direction === 'right' ? distance : 0;
+    const dy = direction === 'up' ? -distance : direction === 'down' ? distance : 0;
+    scrollBy(dx, dy);
+    return { ok: true, scroll: { x: scrollX, y: scrollY } };
+  }
+  return { ok: false, error: `Unsupported page action "${type}".` };
+
+  function resolveTarget(rawArgs) {
+    if (rawArgs.bid != null) return document.querySelector(`[data-mcti-bid="${CSS.escape(String(rawArgs.bid))}"]`);
+    if (rawArgs.selector) return document.querySelector(rawArgs.selector);
+    const coords = rawArgs.coords || rawArgs.coordinate || null;
+    const x = rawArgs.x ?? rawArgs.coordinate_x ?? coords?.[0];
+    const y = rawArgs.y ?? rawArgs.coordinate_y ?? coords?.[1];
+    if (x != null && y != null) return document.elementFromPoint(Number(x), Number(y));
+    return null;
+  }
+}
+
+async function promptAdapterAgent({ architecture, runtime, message, stopped }) {
+  const agent = AGENT_ARCHITECTURES[architecture];
+  const adapterUrl = `${currentAdapterBaseUrl()}${agent.endpoint}`;
+  const runId = `${architecture}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const history = [];
+  logLine('note', agent.label, `Using adapter ${adapterUrl}`);
+
+  for (let step = 1; step <= currentAgentMaxSteps(); step++) {
+    if (stopped()) return;
+    const observation = await runtime.inspect({ includeScreenshot: true });
+    const request = {
+      architecture,
+      runId,
+      step,
+      maxSteps: currentAgentMaxSteps(),
+      prompt: message,
+      observation,
+      history,
+      actionSchema: BROWSER_ACTIONS,
+    };
+    trace.push({ adapterRequest: request });
+
+    const response = await fetch(adapterUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      throw new Error(`${agent.label} adapter ${response.status}: ${await response.text()}`);
+    }
+
+    const payload = await response.json();
+    trace.push({ adapterResponse: payload });
+    if (payload.message || payload.thought) {
+      logLine('agent', agent.label, payload.message || payload.thought);
+    }
+    if (payload.done || payload.finalAnswer) {
+      logLine('agent', agent.label, payload.finalAnswer || payload.message || 'Done.');
+      return;
+    }
+
+    const actions = normalizeAdapterActions(payload);
+    if (!actions.length) {
+      logJSON('error', `${agent.label} returned no action`, JSON.stringify(payload));
+      return;
+    }
+
+    for (const action of actions) {
+      if (stopped()) return;
+      logJSON('toolcall', `${agent.label} action -> ${action.type}`, JSON.stringify(action));
+      const result = await runtime.executeAction(action);
+      history.push({ step, action, result });
+      trace.push({ adapterAction: action, adapterActionResult: result });
+      logJSON('toolresult', `${agent.label} result -> ${action.type}`, JSON.stringify(result), { open: false });
+      if (result.terminal) {
+        if (result.message) logLine('agent', agent.label, result.message);
+        return;
+      }
+    }
+  }
+
+  logLine('error', agent.label, `Stopped after ${currentAgentMaxSteps()} steps.`);
+}
+
+function normalizeToolsForAdapter(tools) {
+  return (tools || []).map((tool) => ({
+    name: tool.name,
+    description: tool.description || '',
+    inputSchema: tool.inputSchema ? safeParseJSON(tool.inputSchema, {}) : {},
+    readOnly: tool.readOnlyHint === '\u2713' || tool.readOnlyHint === true,
+    untrustedContent: tool.untrustedContentHint === '\u2713' || tool.untrustedContentHint === true,
+    location: tool.location || '',
+  }));
+}
+
+function normalizeAdapterActions(payload) {
+  const raw = payload.actions || payload.action || payload.tool_call || payload.toolCall;
+  if (!raw) return [];
+  const list = Array.isArray(raw) ? raw : [raw];
+  return list.map(normalizeAction).filter(Boolean);
+}
+
+function normalizeAction(raw) {
+  if (!raw) return null;
+  if (typeof raw === 'string') return parseActionString(raw);
+  if (raw.function?.name) {
+    return normalizeAction({
+      name: raw.function.name,
+      args: typeof raw.function.arguments === 'string'
+        ? safeParseJSON(raw.function.arguments, { value: raw.function.arguments })
+        : raw.function.arguments,
+    });
+  }
+  const type = raw.type || raw.action_type || raw.name;
+  const rawArgs = raw.args || raw.arguments || raw.params || raw;
+  const parsedArgs = typeof rawArgs === 'string' ? safeParseJSON(rawArgs, { value: rawArgs }) : rawArgs;
+  const args = parsedArgs && typeof parsedArgs === 'object' && !Array.isArray(parsedArgs)
+    ? { ...parsedArgs }
+    : { value: parsedArgs };
+  delete args.type;
+  delete args.action_type;
+  delete args.name;
+  if (!type) return null;
+  return { type, args };
+}
+
+function parseActionString(raw) {
+  const text = raw.trim();
+  const match = text.match(/^([a-zA-Z_]\w*)\(([\s\S]*)\)$/);
+  if (!match) return null;
+  const [, type, body] = match;
+  if (type === 'go_back' || type === 'go_forward') return { type, args: {} };
+  if (type === 'scroll') return { type, args: { direction: firstQuotedValue(body) || 'down' } };
+  if (type === 'goto') return { type, args: { url: firstQuotedValue(body) || body.trim() } };
+  if (type === 'stop') return { type, args: { text: firstQuotedValue(body) || body.trim() } };
+  if (type === 'click') return { type, args: { bid: firstQuotedValue(body) || body.trim() } };
+  if (type === 'fill') {
+    const values = quotedValues(body);
+    return { type, args: { bid: values[0], value: values[1] || '' } };
+  }
+  if (type === 'webmcp_call') {
+    const values = quotedValues(body);
+    return { type, args: { tool: values[0], params: safeParseJSON(values[1] || '{}', values[1] || '{}') } };
+  }
+  return { type, args: { raw: body } };
+}
+
+function quotedValues(text) {
+  const values = [];
+  const pattern = /(['"])((?:\\.|(?!\1).)*)\1/g;
+  let match;
+  while ((match = pattern.exec(text))) values.push(match[2].replace(/\\(['"])/g, '$1'));
+  return values;
+}
+
+function firstQuotedValue(text) {
+  return quotedValues(text)[0];
+}
+
+function safeParseJSON(text, fallback) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return fallback;
+  }
+}
+
 resetBtn.onclick = () => {
   activeRunId++;
   activeRun = null;
@@ -559,6 +1066,19 @@ resetBtn.onclick = () => {
   trace = [];
   userPromptText.value = '';
   promptResults.textContent = '';
+};
+
+inspectBtn.onclick = async () => {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const run = activeRun || { id: activeRunId, tabId: tab.id, tools: currentTools || [] };
+    const runtime = new BrowserRuntime({ tab, run, stopped: () => false });
+    const observation = await runtime.inspect({ includeScreenshot: false });
+    trace.push({ inspection: observation });
+    logJSON('note', 'Inspection snapshot', JSON.stringify(observation));
+  } catch (error) {
+    logLine('error', 'Inspect error', String(error));
+  }
 };
 
 // Save live so the Send button enables as soon as a key is present; rebuild the
