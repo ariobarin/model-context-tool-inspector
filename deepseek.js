@@ -50,7 +50,7 @@ function openAICompatibleDescription(fd) {
   const parts = [fd.description || ''];
   const responseSchema = fd.responseJsonSchema || fd.response;
   if (responseSchema) {
-    parts.push(`Return value JSON schema:\n${JSON.stringify(responseSchema, null, 2)}`);
+    parts.push(`Tool response JSON schema:\n${JSON.stringify(responseSchema, null, 2)}`);
   }
   return parts.filter(Boolean).join('\n\n');
 }

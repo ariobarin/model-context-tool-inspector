@@ -177,16 +177,16 @@ copyAsScriptToolConfig.onclick = async () => {
   const text = currentTools
     .map((tool) => {
       const outputSchema = tool.outputSchema
-        ? `\n  output_schema: ${schemaToJSONString(tool.outputSchema)}`
+        ? `\n  output_schema: ${textprotoJSONString(tool.outputSchema)}`
         : '';
       const annotations = tool.annotations
-        ? `\n  annotations: ${schemaToJSONString(tool.annotations, {})}`
+        ? `\n  annotations: ${textprotoJSONString(tool.annotations, {})}`
         : '';
       return `\
 script_tools {
   name: "${tool.name}"
   description: "${tool.description}"
-  input_schema: ${schemaToJSONString(tool.inputSchema)}${outputSchema}${annotations}
+  input_schema: ${textprotoJSONString(tool.inputSchema)}${outputSchema}${annotations}
 }`;
     })
     .join('\r\n');
@@ -782,7 +782,7 @@ function getConfig(tools = currentTools) {
         name: `_${locationIndex}_${tool.name}`,
         description: toolDescription(tool),
         parametersJsonSchema: parseJSONOrDefault(tool.inputSchema, { type: 'object', properties: {} }),
-        ...(tool.outputSchema ? { responseJsonSchema: parseJSONOrDefault(tool.outputSchema, tool.outputSchema) } : {}),
+        ...(tool.outputSchema ? { responseJsonSchema: toolResponseSchema(tool.outputSchema) } : {}),
       };
     }),
   ];
@@ -802,6 +802,20 @@ function parseJSONOrDefault(value, fallback) {
 function schemaToJSONString(value, fallback = { type: 'object', properties: {} }) {
   const parsed = parseJSONOrDefault(value, fallback);
   return JSON.stringify(parsed, null, '  ');
+}
+
+function textprotoJSONString(value, fallback = { type: 'object', properties: {} }) {
+  return JSON.stringify(schemaToJSONString(value, fallback));
+}
+
+function toolResponseSchema(outputSchema) {
+  return {
+    type: 'object',
+    properties: {
+      result: parseJSONOrDefault(outputSchema, outputSchema),
+    },
+    required: ['result'],
+  };
 }
 
 function toolDescription(tool) {
