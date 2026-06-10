@@ -76,7 +76,7 @@ chrome.runtime.onMessage.addListener(async ({ message, tools, url, ready }, send
     activeRun.tools = tools;
     // Wake a turn waiting for the destination page to report its tools after a
     // navigation (see the post-tool-call wait in promptAI). `ready` is true only
-    // for the EXPERIMENTAL webmcp:ready-driven push (see content.js) — the
+    // for the EXPERIMENTAL webmcp:ready-driven push (see content.js), the
     // settled, full-tool-set snapshot; toolchange-driven pushes pass it falsy.
     activeRun.onToolsUpdate?.(ready);
   }
@@ -854,7 +854,7 @@ function waitForPageLoad(tabId) {
   });
 }
 
-// EXPERIMENTAL / WIP — specialized to webmcp-public-sites; revisit later.
+// EXPERIMENTAL / WIP: specialized to webmcp-benchmark online partials; revisit later.
 //
 // Resolves when the bound run's destination page has settled its WebMCP tools
 // after a navigation, so the next model turn sees the new page's tools and not
@@ -864,15 +864,15 @@ function waitForPageLoad(tabId) {
 // Resolution preference, by trustworthiness of the trigger:
 //  1. A `ready`-tagged push (the project-specific `webmcp:ready` signal relayed
 //     by content.js) means injection for the new route has finished and the full
-//     tool set is enumerable — resolve immediately on it. This is the whole point
+//     tool set is enumerable. Resolve immediately on it. This is the whole point
 //     of consuming the signal: deterministic instead of timeout-based.
 //  2. A plain toolchange-driven push may be mid-batch (a partial set). A
 //     `webmcp:ready` often follows within a few ms, so we give it a short grace
 //     window and resolve at its end if no ready arrives. This keeps non-ready and
 //     non-instrumented pages responsive while still preferring the settled signal.
-//  3. No push at all (page emits neither) → the outer `timeout` fallback.
+//  3. No push at all (page emits neither) uses the outer timeout fallback.
 //
-// CAVEAT: pages outside webmcp-public-sites never emit `webmcp:ready`, so they
+// CAVEAT: pages outside the benchmark online partials never emit webmcp:ready, so they
 // always resolve via path 2 or 3, i.e. on the grace/fallback timers rather than
 // a real signal. This couples the generic inspector to our instrumented sites
 // and should be reconsidered (e.g. fold the nav/timeout heuristics and this

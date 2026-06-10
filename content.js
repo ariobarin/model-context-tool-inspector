@@ -10,12 +10,12 @@ console.debug(`[WebMCP] Content script injected in ${window.location.href}`);
 // document_start, so a value captured at load may be stale/undefined.
 const getModelContext = () => document.modelContext || navigator.modelContext;
 
-// ─── EXPERIMENTAL / WIP — specialized to webmcp-public-sites ─────────────────
+// EXPERIMENTAL / WIP: specialized to webmcp-benchmark online partials.
 // `webmcp:ready` is NOT part of the WebMCP standard. It is a project-specific
-// convention emitted by our own page partials (webmcp-public-sites,
-// sites/*/src/webmcp-shared.js) from a `finally` clause after each route's tools
+// convention emitted by our own page partials
+// (`webmcp-benchmark/sites/online/*/src/webmcp-shared.js`) from a finally clause after each route tools
 // finish (re)registering. It means: "tool injection for this page kind has
-// settled — the full tool set is now enumerable."
+// settled. The full tool set is now enumerable.
 //
 // We consume it to get ONE authoritative refresh per transition, instead of
 // reacting only to the standard per-tool `toolchange` event (which fires
@@ -23,10 +23,10 @@ const getModelContext = () => document.modelContext || navigator.modelContext;
 // re-enumerate via listTools('ready'); we deliberately do NOT read
 // event.detail.{kind,tools}, because that detail object is authored in the
 // page's MAIN world and is not reliably readable from this isolated-world
-// content script — we trust the event only as a "settled" trigger.
+// content script. We trust the event only as a settled trigger.
 //
-// CAVEATS — REVISIT LATER (this is a prototype, not a finished design):
-//  - Pages NOT instrumented by webmcp-public-sites never fire this, so the agent
+// CAVEATS, REVISIT LATER (this is a prototype, not a finished design):
+//  - Pages not instrumented by the benchmark online partials never fire this, so the agent
 //    loop falls back to timeout-based waiting for them (see sidebar.js
 //    waitForToolsUpdate). This couples the otherwise-generic inspector to our
 //    sites.
@@ -130,7 +130,7 @@ if (window.top === window) {
 }
 
 // `reason === 'ready'` marks this push as the webmcp:ready-driven, settled
-// snapshot (EXPERIMENTAL — see onWebmcpReady). The standard toolchange handler
+// snapshot (EXPERIMENTAL, see onWebmcpReady). The standard toolchange handler
 // passes an Event here, which is !== 'ready', so those refreshes stay untagged.
 async function listTools(reason) {
   const mc = getModelContext();
