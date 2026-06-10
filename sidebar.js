@@ -284,7 +284,7 @@ async function initProvider() {
 
   localStorage.provider ??= env?.provider || 'ark';
   localStorage.agentArchitecture ??= env?.agentArchitecture || 'base';
-  localStorage.agentAdapterUrl ??= env?.agentAdapterUrl || 'http://127.0.0.1:8765';
+  localStorage.agentAdapterUrl ??= env?.agentAdapterUrl || '';
   localStorage.agentMaxSteps ??= String(env?.agentMaxSteps || 30);
 
   // Gemini key + model migrations.
@@ -917,6 +917,9 @@ async function promptAdapterAgent({ architecture, runtime, message, stopped }) {
   const adapterUrl = `${currentAdapterBaseUrl()}${agent.endpoint}`;
   const runId = `${architecture}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const history = [];
+  if (!currentAdapterBaseUrl()) {
+    throw new Error(`${agent.label} requires an Agent Adapter URL. Set it to a running adapter server before sending.`);
+  }
   logLine('note', agent.label, `Using adapter ${adapterUrl}`);
 
   for (let step = 1; step <= currentAgentMaxSteps(); step++) {
@@ -934,11 +937,16 @@ async function promptAdapterAgent({ architecture, runtime, message, stopped }) {
     };
     trace.push({ adapterRequest: request });
 
-    const response = await fetch(adapterUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-    });
+    let response;
+    try {
+      response = await fetch(adapterUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      });
+    } catch (error) {
+      throw new Error(formatAdapterConnectionError(agent, adapterUrl, error));
+    }
     if (!response.ok) {
       throw new Error(`${agent.label} adapter ${response.status}: ${await response.text()}`);
     }
@@ -974,6 +982,11 @@ async function promptAdapterAgent({ architecture, runtime, message, stopped }) {
   }
 
   logLine('error', agent.label, `Stopped after ${currentAgentMaxSteps()} steps.`);
+}
+
+function formatAdapterConnectionError(agent, adapterUrl, error) {
+  const detail = error?.message ? ` (${error.message})` : '';
+  return `${agent.label} adapter is not reachable at ${adapterUrl}${detail}. Start a compatible agent adapter server or set Agent Adapter URL to one that is running.`;
 }
 
 function normalizeToolsForAdapter(tools) {
