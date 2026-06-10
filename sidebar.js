@@ -216,17 +216,15 @@ function currentModel() {
 const AGENT_ARCHITECTURES = {
   base: {
     label: 'Base',
-    adapter: false,
+    mode: 'base',
   },
   weboperator: {
     label: 'WebOperator',
-    adapter: true,
-    endpoint: '/agents/weboperator/step',
+    mode: 'browser',
   },
   opagent: {
     label: 'OpAgent',
-    adapter: true,
-    endpoint: '/agents/opagent/step',
+    mode: 'browser',
   },
 };
 
@@ -241,7 +239,11 @@ function currentAgent() {
 }
 
 function isAdapterAgent() {
-  return !!currentAgent().adapter;
+  return currentAgent().mode === 'adapter';
+}
+
+function isBrowserAgent() {
+  return currentAgent().mode === 'browser';
 }
 
 function currentAdapterBaseUrl() {
@@ -402,7 +404,7 @@ function syncAdvancedUI() {
   setRadio('arkThinking', localStorage.arkThinking);
   setRadio('deepseekModel', localStorage.deepseekModel);
   setRadio('deepseekThinking', localStorage.deepseekThinking);
-  agentAdapterUrlInput.value = localStorage.agentAdapterUrl || '';
+  if (agentAdapterUrlInput) agentAdapterUrlInput.value = localStorage.agentAdapterUrl || '';
   agentMaxStepsInput.value = String(currentAgentMaxSteps());
 }
 
@@ -462,10 +464,12 @@ document.querySelectorAll('input[name="deepseekThinking"]').forEach((radio) => {
   };
 });
 
-agentAdapterUrlInput.oninput = () => {
-  localStorage.agentAdapterUrl = agentAdapterUrlInput.value.trim();
-  updateRunButtons();
-};
+if (agentAdapterUrlInput) {
+  agentAdapterUrlInput.oninput = () => {
+    localStorage.agentAdapterUrl = agentAdapterUrlInput.value.trim();
+    updateRunButtons();
+  };
+}
 
 agentMaxStepsInput.oninput = () => {
   const maxSteps = Number.parseInt(agentMaxStepsInput.value, 10);
@@ -476,7 +480,7 @@ agentMaxStepsInput.oninput = () => {
 
 // The Suggest button is usable once a client and tools are both available.
 function updateSuggestButton() {
-  suggestBtn.disabled = isAdapterAgent() || !genAI || !currentTools || currentTools.length === 0;
+  suggestBtn.disabled = currentAgentArchitecture() !== 'base' || !genAI || !currentTools || currentTools.length === 0;
 }
 
 suggestBtn.onclick = async () => {
@@ -559,7 +563,11 @@ async function promptAI() {
   const architecture = currentAgentArchitecture();
   if (architecture !== 'base') {
     const runtime = new BrowserRuntime({ tab, run, stopped });
-    await promptAdapterAgent({ architecture, runtime, message, stopped });
+    if (isAdapterAgent()) {
+      await promptAdapterAgent({ architecture, runtime, message, stopped });
+    } else {
+      await promptBrowserAgent({ architecture, runtime, message, stopped });
+    }
     return;
   }
 
@@ -910,6 +918,128 @@ function executePageAction(action) {
     if (x != null && y != null) return document.elementFromPoint(Number(x), Number(y));
     return null;
   }
+}
+
+async function promptBrowserAgent({ architecture, runtime, message, stopped }) {
+  const agent = AGENT_ARCHITECTURES[architecture];
+  const browserChat = genAI.chats.create({ model: currentModel() });
+  const config = getBrowserAgentConfig(architecture);
+  const history = [];
+  logLine('note', agent.label, `Using built-in ${agent.label} browser agent`);
+
+  for (let step = 1; step <= currentAgentMaxSteps(); step++) {
+    if (stopped()) return;
+    const observation = await runtime.inspect({ includeScreenshot: false });
+    const userMessage = buildBrowserAgentMessage({ architecture, message, observation, history, step });
+    trace.push({ browserAgentPrompt: { architecture, step, message: userMessage } });
+
+    let currentResult = await browserChat.sendMessage({ message: userMessage, config });
+    if (stopped()) return;
+
+    while (true) {
+      trace.push({ browserAgentResponse: currentResult });
+      const functionCalls = currentResult.functionCalls || [];
+      if (!functionCalls.length) {
+        const text = currentResult.text?.trim();
+        if (text) logLine('agent', agent.label, text);
+        return;
+      }
+
+      const toolResponses = [];
+      for (const { name, args } of functionCalls) {
+        if (stopped()) return;
+        const action = { type: name, args: args || {} };
+        logJSON('toolcall', `${agent.label} action -> ${name}`, JSON.stringify(action));
+        const result = await runtime.executeAction(action);
+        history.push({ step, action, result });
+        trace.push({ browserAgentAction: action, browserAgentActionResult: result });
+        logJSON('toolresult', `${agent.label} result -> ${name}`, JSON.stringify(result), { open: false });
+        toolResponses.push({ functionResponse: { name, response: result } });
+        if (result.terminal) {
+          if (result.message) logLine('agent', agent.label, result.message);
+          return;
+        }
+      }
+
+      currentResult = await browserChat.sendMessage({ message: toolResponses, config });
+      if (stopped()) return;
+    }
+  }
+
+  logLine('error', agent.label, `Stopped after ${currentAgentMaxSteps()} steps.`);
+}
+
+function getBrowserAgentConfig(architecture) {
+  return {
+    systemInstruction: getBrowserAgentSystemInstruction(architecture),
+    tools: [{ functionDeclarations: getBrowserActionDeclarations() }],
+  };
+}
+
+function getBrowserAgentSystemInstruction(architecture) {
+  const label = AGENT_ARCHITECTURES[architecture]?.label || 'Browser Agent';
+  const style = architecture === 'opagent'
+    ? 'Use an operation-agent style: maintain a short goal, choose precise actions, and verify after each page change.'
+    : 'Use a WebOperator style: observe the page, choose browser actions, and use WebMCP tools when they are the most direct path.';
+  return [
+    `You are ${label}, an agent controlling the active browser tab.`,
+    style,
+    'Use only the provided browser action functions.',
+    'Prefer WebMCP tool calls when the observation lists relevant WebMCP tools.',
+    'Use click, fill, select_option, scroll, goto, go_back, go_forward, and wait to operate normal page UI.',
+    'Call answer or stop when the user request is complete.',
+    `Today's date is: ${getFormattedDate()}.`,
+  ];
+}
+
+function buildBrowserAgentMessage({ architecture, message, observation, history, step }) {
+  return [
+    `Architecture: ${AGENT_ARCHITECTURES[architecture]?.label || architecture}`,
+    `User request: ${message}`,
+    `Step: ${step} of ${currentAgentMaxSteps()}`,
+    `Recent action results: ${JSON.stringify(history.slice(-6), null, 2)}`,
+    `Current browser observation: ${JSON.stringify(observation, null, 2)}`,
+  ].join('\n\n');
+}
+
+function getBrowserActionDeclarations() {
+  return BROWSER_ACTIONS.map((action) => ({
+    name: action.type,
+    description: action.description,
+    parametersJsonSchema: simpleActionSchemaToJsonSchema(action.schema || {}),
+  }));
+}
+
+function simpleActionSchemaToJsonSchema(schema) {
+  const properties = {};
+  const required = [];
+  for (const [name, typeSpec] of Object.entries(schema)) {
+    const raw = String(typeSpec);
+    const optional = raw.endsWith('?');
+    const clean = optional ? raw.slice(0, -1) : raw;
+    properties[name] = simpleTypeToJsonSchema(clean);
+    if (!optional) required.push(name);
+  }
+  return {
+    type: 'object',
+    properties,
+    ...(required.length ? { required } : {}),
+  };
+}
+
+function simpleTypeToJsonSchema(typeSpec) {
+  if (typeSpec.includes('|')) {
+    const parts = typeSpec.split('|').map((part) => part.trim()).filter(Boolean);
+    const primitiveTypes = new Set(['string', 'number', 'boolean', 'object']);
+    if (parts.every((part) => primitiveTypes.has(part))) {
+      return { anyOf: parts.map((part) => ({ type: part })) };
+    }
+    return { type: 'string', enum: parts };
+  }
+  if (typeSpec === 'number') return { type: 'number' };
+  if (typeSpec === 'boolean') return { type: 'boolean' };
+  if (typeSpec === 'object') return { type: 'object', additionalProperties: true };
+  return { type: 'string' };
 }
 
 async function promptAdapterAgent({ architecture, runtime, message, stopped }) {
