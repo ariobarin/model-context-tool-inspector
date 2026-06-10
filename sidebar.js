@@ -809,10 +809,14 @@ function textprotoJSONString(value, fallback = { type: 'object', properties: {} 
 }
 
 function toolResponseSchema(outputSchema) {
+  const schema = parseJSONOrDefault(outputSchema, outputSchema);
+  if (schema?.type === 'object' && schema.properties?.result) {
+    return schema;
+  }
   return {
     type: 'object',
     properties: {
-      result: parseJSONOrDefault(outputSchema, outputSchema),
+      result: schema,
     },
     required: ['result'],
   };
