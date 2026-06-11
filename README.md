@@ -4,7 +4,10 @@ A Chrome Extension that allows developers to inspect, monitor, and execute tools
 
 ## Prerequisites
 
-**Important:** This extension relies on the WebMCP browser API. Enable `chrome://flags/#enable-web-mcp` and relaunch Chrome before using it.
+**Important:** This extension relies on the WebMCP browser API. On this Windows
+dev host, use the `Chrome149 (WebMCP)` desktop shortcut. Elsewhere, use Chromium
+or Chrome 149+ with `chrome://flags/#enable-web-mcp` enabled, or launch with
+`--enable-features=WebMCPTesting,DevToolsWebMCPSupport`.
 
 ## Installation
 
