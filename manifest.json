@@ -1,13 +1,26 @@
 {
   "manifest_version": 3,
   "name": "WebMCP - Model Context Tool Inspector",
-  "description": "Inspect, monitor, and execute WebMCP tools manually or with Gemini, ARK (Doubao), or DeepSeek",
+  "description": "Inspect WebMCP tools and run Base, WebOperator, or OpAgent browser agents with Gemini, ARK, or DeepSeek",
   "version": "1.9.7",
   "minimum_chrome_version": "148.0.7778.56",
   "permissions": ["sidePanel", "activeTab", "scripting"],
   "host_permissions": ["<all_urls>"],
   "update_url": "https://clients2.google.com/service/update2/crx",
-  "action": {},
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
   "background": {
     "service_worker": "background.js"
   },

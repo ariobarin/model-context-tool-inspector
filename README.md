@@ -4,7 +4,10 @@ A Chrome Extension that allows developers to inspect, monitor, and execute tools
 
 ## Prerequisites
 
-**Important:** This extension relies on the WebMCP browser API. Enable `chrome://flags/#enable-web-mcp` and relaunch Chrome before using it.
+**Important:** This extension relies on the WebMCP browser API. On this Windows
+dev host, use the `Chrome149 (WebMCP)` desktop shortcut. Elsewhere, use Chromium
+or Chrome 149+ with `chrome://flags/#enable-web-mcp` enabled, or launch with
+`--enable-features=WebMCPTesting,DevToolsWebMCPSupport`.
 
 ## Installation
 
@@ -86,10 +89,31 @@ ship defaults in an optional `.env.json` next to `sidebar.html`:
   "deepseekApiKey": "...",
   "deepseekModel": "deepseek-v4-flash",
   "deepseekThinking": "disabled",
+  "agentArchitecture": "base",
+  "agentAdapterUrl": "http://127.0.0.1:8765",
+  "agentMaxSteps": 30,
   "apiKey": "...",
   "model": "gemini-3-flash-preview"
 }
 ```
+
+## Choosing an agent architecture
+
+The side panel supports multiple agent architectures. Open **Config** and choose:
+
+* **Base:** the built-in direct function-calling loop. This is the default.
+* **WebOperator:** runs a built-in WebOperator-style browser agent.
+* **OpAgent:** runs a built-in operation-agent-style browser agent.
+
+WebOperator and OpAgent use the selected model provider and preserve full
+browser-agent behavior, not only WebMCP tool calls. Each step inspects the
+current tab and gives the model the current URL, title, page text, interactive
+elements, browser action schema, and available WebMCP tools.
+
+Supported action types are `click`, `fill`, `type`, `select_option`, `scroll`,
+`goto`, `go_back`, `go_forward`, `wait`, `webmcp_call`, `webmcp_tool`, `answer`,
+and `stop`. The **Inspect** button records the same normalized page snapshot to
+the trace without starting an agent run.
 
 ## Disclaimer
 

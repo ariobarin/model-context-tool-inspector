@@ -425,7 +425,9 @@ dialog::backdrop {
   width: auto;
 }
 
-#apiKeyInput {
+#apiKeyInput,
+#agentAdapterUrlInput,
+#agentMaxStepsInput {
   width: calc(100% - 20px);
   margin: 4px 10px 8px 10px;
   font-size: 0.8125rem;
