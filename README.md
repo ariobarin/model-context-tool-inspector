@@ -91,6 +91,19 @@ ship defaults in an optional `.env.json` next to `sidebar.html`:
 }
 ```
 
+## Differences from upstream
+
+This is a fork of [beaufortfrancois/model-context-tool-inspector](https://github.com/beaufortfrancois/model-context-tool-inspector). On top of the upstream inspector it adds:
+
+* **More model providers** for "Interact with the Page": Volcano Engine ARK (Doubao) and DeepSeek, alongside the original Gemini driver. Each provider has its own model list, API-key input, and (where supported) thinking-mode toggle.
+* **Robust tool discovery** that survives navigation: tools surface on load instead of waiting for `list_tools`, the `webmcp:ready` signal drives post-navigation waits, discovery is restricted to the top frame, and overlapping ticks or tab switches no longer corrupt an active run.
+* **JSON syntax highlighting** in the tools table via a vendored highlight.js bundle, with collapsible entries and a sized, scrollable table.
+* **Agent log formatting** into role-tagged entries, plus UX polish: prompt suggestion as a button, per-tool enable/disable menu, "previous page" as a global agent tool, copy-trace feedback, and reset-aware run cancellation.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
+
 ## Disclaimer
 
 This is not an officially supported Google product. This project is not
